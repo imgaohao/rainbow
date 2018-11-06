@@ -1,21 +1,12 @@
 <?php
 
 use Curl\Curl;
-use PHPHtmlParser\Dom;
 
-class DownloadImage
+class Weibo
 {
-    /**
-     * @param $url
-     * @throws ErrorException
-     * @throws Exception
-     */
-    public static function weibo($url)
+    public static function get($url)
     {
-        (new Vgather)->catch_html('https://weibo.com/gaohaoblog?refer_flag=1001030101_');
-
-
-        $url = 'https://weibo.com/gaohaoblog?refer_flag=1001030101_';
+        (new Vgather)->catch_html($url);
 
         $genvisitor = "https://passport.weibo.com/visitor/genvisitor";
         $genvisitorData = 'cb=gen_callback&fp=' . urlencode('{"os":"1","browser":"Chrome69,0,3497,81","fonts":"undefined","screenInfo":"1920*1080*24","plugins":"Portable Document Format::internal-pdf-viewer::Chrome PDF Plugin|::mhjfbmdgcfjbbpaeojofohoefgiehjai::Chrome PDF Viewer|::internal-nacl-plugin::Native Client"}');

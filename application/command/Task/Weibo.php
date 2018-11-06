@@ -1,5 +1,5 @@
 <?php
-namespace app\command\DownloadImage;
+namespace app\command\Task;
 
 use think\console\Command;
 use think\console\Input;
@@ -11,14 +11,14 @@ class Weibo extends Command
 {
     public function configure()
     {
-        $this->setName('downloadimage:weibo')
+        $this->setName('task:weibo')
 //            ->addArgument('url', Argument::REQUIRED, '微博主页url')
-            ->setDescription('下载微博图片');
+            ->setDescription('');
     }
 
     public function execute(Input $input, Output $output)
     {
-        \DownloadImage::weibo(123);
+        \Weibo::get('https://weibo.com/gaohaoblog?refer_flag=1001030101_');
     }
     
     

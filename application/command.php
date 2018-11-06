@@ -10,5 +10,5 @@
 // +----------------------------------------------------------------------
 
 return [
-    '\app\command\DownloadImage\Weibo'
+    '\app\command\Task\Weibo'
 ];
