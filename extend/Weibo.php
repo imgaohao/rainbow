@@ -45,12 +45,14 @@ class Weibo
         preg_match('/[^"]+\bphotos\b[^"]+/', $content, $matches);
         $photo_url = str_replace('\\', '', self::DOMAIN . $matches[0]);
         $content = $this->catch_html($photo_url);
+
         preg_match('/<title>(.+)的微博.+<\/title>/', $content, $matches);
         $name = iconv('utf-8', 'gbk', $matches[1]);
         $dir = $this->getSavePath() . $name . '/';
         if (!file_exists($dir)) {
             mkdir($dir);
         }
+
         preg_match_all('/(?:https:)?\/\/(?:wx3|wxt)\.sinaimg\.cn[^"]+/', $content, $matches);
         foreach ($matches[0] as $match) {
             if (strpos($match, 'https') !== 0) {
@@ -59,11 +61,16 @@ class Weibo
             preg_match('/[^\/]+\.jpg/', $match, $m);
             file_put_contents($dir . $m[0], file_get_contents($match));
         }
+
         preg_match_all('/http:\/\/video\.weibo\.com[^"]+/', $content, $matches);
         $videos = array_unique($matches[0]);
         foreach ($videos as $video) {
-            preg_match('/[^\/:]+$/', $video, $m);
-            file_put_contents($dir . $m[0] . '.mp4', file_get_contents($video));
+            $content = $this->catch_html($video);
+            preg_match('/video-sources="([^"]+)"/', $content, $matches);
+            $list = preg_split('/&\d+=/', str_replace('fluency=', '', urldecode($matches[1])));
+            $video_url = end($list);
+            preg_match('/[^\/]+\.mp4/', $video_url, $m);
+            @file_put_contents($dir . $m[0], @file_get_contents($video_url));
         }
     }
 
@@ -117,6 +124,7 @@ class Weibo
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_PROXY, '127.0.0.1:8888');
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36');//模拟UA
         if ($show_header)
             curl_setopt($ch, CURLOPT_HEADER, 1);  //show header 为了拿到cookie
