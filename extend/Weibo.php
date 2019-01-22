@@ -4,39 +4,164 @@ use Curl\Curl;
 
 class Weibo
 {
-    public static function get($url)
+    protected $save_path;
+
+    const DOMAIN = 'https://www.weibo.com';
+
+    public function __construct($config)
     {
-        (new Vgather)->catch_html($url);
+        if (isset($config['save_path'])) {
+            $this->setSavePath($config['save_path']);
+        }
+    }
 
-        $genvisitor = "https://passport.weibo.com/visitor/genvisitor";
-        $genvisitorData = 'cb=gen_callback&fp=' . urlencode('{"os":"1","browser":"Chrome69,0,3497,81","fonts":"undefined","screenInfo":"1920*1080*24","plugins":"Portable Document Format::internal-pdf-viewer::Chrome PDF Plugin|::mhjfbmdgcfjbbpaeojofohoefgiehjai::Chrome PDF Viewer|::internal-nacl-plugin::Native Client"}');
+    /**
+     * @return mixed
+     */
+    public function getSavePath()
+    {
+        return $this->save_path;
+    }
 
-        $visitor = 'https://passport.weibo.com/visitor/visitor?a=restore&cb=restore_back&from=weibo&_rand=0.2665468362213905';
-        $curl = new Curl();
-        $curl->setOpt(CURLOPT_SSL_VERIFYPEER, false);
-        $curl->setOpt(CURLOPT_FOLLOWLOCATION, true);
-        $curl->setOpt(CURLOPT_PROXY, '127.0.0.1:8888');
-        $curl->post($genvisitor, $genvisitorData);
+    /**
+     * @param mixed $save_path
+     * @return Weibo
+     */
+    public function setSavePath($save_path)
+    {
+        $path = $save_path . '/weibo/';
+        file_exists($path) || mkdir($path);
+        $this->save_path = $path;
+        return $this;
+    }
 
-        if ($curl->error) {
-            throw new Exception('Error: ' . $curl->errorCode . ': ' . $curl->errorMessage);
-        } else {
-            $dom = new DOMDocument();
-            @$dom->loadHTML($curl->response);
-            $xpath = new DOMXPath($dom);
-            $nodeList = $xpath->query('//span[@suda-uatrack="key=tblog_profile_new&value=tab_photos"]');
-            $result = [];
-            /** @var DOMNodeList $nodeList */
-            /** @var DOMElement $node */
-            foreach ($nodeList as $node) {
-                $href = $node->getAttribute('href');
-                $dom = \Dom::getDom('http://jos.jd.com' . $href);
-                $txt = $dom->getElementById('txt');
-                if (strpos($txt->nodeValue, 'vendorCode') !== false) {
-                    $result[] = ['http://jos.jd.com' . $href, $txt->nodeValue];
+    /**
+     * @param $url
+     * @throws Exception
+     */
+    public function get($url)
+    {
+        $content = $this->catch_html($url);
+        preg_match('/[^"]+\bphotos\b[^"]+/', $content, $matches);
+        $photo_url = str_replace('\\', '', self::DOMAIN . $matches[0]);
+        $content = $this->catch_html($photo_url);
+        preg_match('/<title>(.+)的微博.+<\/title>/', $content, $matches);
+        $name = iconv('utf-8', 'gbk', $matches[1]);
+        $dir = $this->getSavePath() . $name . '/';
+        if (!file_exists($dir)) {
+            mkdir($dir);
+        }
+        preg_match_all('/(?:https:)?\/\/(?:wx3|wxt)\.sinaimg\.cn[^"]+/', $content, $matches);
+        foreach ($matches[0] as $match) {
+            if (strpos($match, 'https') !== 0) {
+                $match = "https:{$match}";
+            }
+            preg_match('/[^\/]+\.jpg/', $match, $m);
+            file_put_contents($dir . $m[0], file_get_contents($match));
+        }
+        preg_match_all('/http:\/\/video\.weibo\.com[^"]+/', $content, $matches);
+        $videos = array_unique($matches[0]);
+        foreach ($videos as $video) {
+            preg_match('/[^\/:]+$/', $video, $m);
+            file_put_contents($dir . $m[0] . '.mp4', file_get_contents($video));
+        }
+    }
+
+    /**
+     *
+     * 由于weibo防爬虫需要获得访客身份cookie后在访问,大致流程如下。
+     * 获得tid->请求一个访客cookie->请求一个跨域cookie->抓去数据。
+     * @param string $url
+     * @author maskxu
+     * @throws Exception
+     */
+    public function catch_html($url)
+    {
+        //获得tid
+        static $xcookie;
+        if (!$xcookie) {
+            $xcookie_path = $this->getSavePath() . 'xcookie';
+            if (!file_exists($xcookie_path)) {
+                $tid = $this->_get_tid();
+                $cookie = $this->_get_cookie($tid, $sub, $subp);
+                if (empty($sub)) //sub 可能会获取失败,原因未知,可能是因为频繁访问.
+                {
+                    throw new Exception("Get Sub error", 1);
                 }
+                $xcookie = $this->_get_crosscookie($sub, $subp, $cookie);
+                file_put_contents($xcookie_path, $xcookie);
+            } else {
+                $xcookie = file_get_contents($xcookie_path);
             }
         }
+        $content = $this->_curl_data($url, "GET", "", true, $xcookie, false);
+        file_put_contents($this->getSavePath() . 'content.html', $content);
+        return str_replace('\\', '', $content);
+    }
 
+    //获得tid
+    private function _get_tid()
+    {
+        $postdata['cb'] = "gen_callback";
+        $postdata['fp'] = '{"os":"1","browser":"Chrome61,0,3163,100","fonts":"undefined","screenInfo":"1920*1080*24","plugins":"Portable Document Format::internal-pdf-viewer::Chrome PDF Plugin|::mhjfbmdgcfjbbpaeojofohoefgiehjai::Chrome PDF Viewer|::internal-nacl-plugin::Native Client|Enables Widevine licenses for playback of HTML audio/video content. (version: 1.4.8.1008)::widevinecdmadapter.dll::Widevine Content Decryption Module"}';
+        $url = "https://passport.weibo.com/visitor/genvisitor";
+        $content = $this->_curl_data($url, "POST", $postdata);
+        preg_match('/"tid":"(.*)",/i', $content, $matches);
+        $tid = stripcslashes($matches[1]);
+        return $tid;
+    }
+
+    //第一次获得cookie. sub,subp,cookie是第二次获得跨域cookie必须的.
+    private function _curl_data($url, $method = "GET", $postdata = "", $ssl = true, &$cookie = "", $show_header = true)
+    {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_PROXY, '127.0.0.1:8888');
+        curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36');//模拟UA
+        if ($show_header)
+            curl_setopt($ch, CURLOPT_HEADER, 1);  //show header 为了拿到cookie
+        if ($method == "POST") {
+            curl_setopt($ch, CURLOPT_POST, 1);//使用post提交数据
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $postdata);//设置 post提交的数据
+        }
+        if ($ssl) {
+            // curl_setopt($ch, CURLOPT_SSLVERSION, 3); //设定SSL版本
+            // 对认证证书来源的检查，0表示阻止对证书的合法性的检查。
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        }
+        if ($cookie != "") {
+            curl_setopt($ch, CURLOPT_COOKIE, $cookie);
+        }
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);//关闭直接输出
+        $data = curl_exec($ch);
+        if ($show_header) {
+            preg_match_all('|Set-Cookie: (.*);|U', $data, $results);
+            if (count($results) > 1)
+                $cookie = implode(';', $results[1]);
+        }
+        curl_close($ch);
+        return $data;
+    }
+
+    //第二次获得跨域xcookie
+    private function _get_cookie($tid, &$sub, &$subp)
+    {
+        $url = "https://passport.weibo.com/visitor/visitor?";
+        $url .= 'a=incarnate&t=' . urlencode($tid) . '&w=1&c=095&gc=&cb=crossdomain&from=weibo&_rand=0.' . rand();
+        $cookie = "";
+        $content = $this->_curl_data($url, "GET", "", true, $cookie);
+        preg_match('/"sub":"(.*)",/i', $content, $matches);
+        $sub = $matches[1];
+        preg_match('/"subp":"(.*)"}/i', $content, $matches);
+        $subp = $matches[1];
+        return $cookie;
+    }
+
+    private function _get_crosscookie($sub, $subp, $cookie)
+    {
+        $url = "https://passport.weibo.com/visitor/visitor?";
+        $url .= 'a=crossdomain&cb=return_back&s=' . $sub . '&sp=' . $subp . '&w=2&from=weibo&rand=0.' . rand();
+        $content = $this->_curl_data($url, "GET", "", true, $cookie);
+        return $cookie;
     }
 }
