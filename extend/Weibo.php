@@ -7,6 +7,7 @@ class Weibo
     protected $save_path;
 
     const DOMAIN = 'https://www.weibo.com';
+    const PROXY = '127.0.0.1:1080';
 
     public function __construct($config)
     {
@@ -41,11 +42,14 @@ class Weibo
      */
     public function get($url)
     {
+        $domain = self::DOMAIN;
+
         $content = $this->catch_html($url);
         preg_match('/[^"]+\bphotos\b[^"]+/', $content, $matches);
-        $photo_url = str_replace('\\', '', self::DOMAIN . $matches[0]);
+        $photo_url = str_replace('\\', '', $domain . $matches[0]);
         $content = $this->catch_html($photo_url);
 
+        //保存名字
         preg_match('/<title>(.+)的微博.+<\/title>/', $content, $matches);
         $name = iconv('utf-8', 'gbk', $matches[1]);
         $dir = $this->getSavePath() . $name . '/';
@@ -53,24 +57,42 @@ class Weibo
             mkdir($dir);
         }
 
-        preg_match_all('/(?:https:)?\/\/(?:wx3|wxt)\.sinaimg\.cn[^"]+/', $content, $matches);
-        foreach ($matches[0] as $match) {
-            if (strpos($match, 'https') !== 0) {
-                $match = "https:{$match}";
+        $page = 1;
+        while (1) {
+            //保存图片
+            preg_match_all('/(?:https:)?\/\/(?:wx3|wxt)\.sinaimg\.cn[^"]+/', $content, $matches);
+            foreach ($matches[0] as $match) {
+                if (strpos($match, 'https') !== 0) {
+                    $match = "https:{$match}";
+                }
+                preg_match('/[^\/]+\.jpg/', $match, $m);
+                file_put_contents($dir . $m[0], file_get_contents($match));
             }
-            preg_match('/[^\/]+\.jpg/', $match, $m);
-            file_put_contents($dir . $m[0], file_get_contents($match));
-        }
 
-        preg_match_all('/http:\/\/video\.weibo\.com[^"]+/', $content, $matches);
-        $videos = array_unique($matches[0]);
-        foreach ($videos as $video) {
-            $content = $this->catch_html($video);
-            preg_match('/video-sources="([^"]+)"/', $content, $matches);
-            $list = preg_split('/&\d+=/', str_replace('fluency=', '', urldecode($matches[1])));
-            $video_url = end($list);
-            preg_match('/[^\/]+\.mp4/', $video_url, $m);
-            @file_put_contents($dir . $m[0], @file_get_contents($video_url));
+            //保存视频
+            preg_match_all('/http:\/\/video\.weibo\.com[^"]+/', $content, $matches);
+            $videos = array_unique($matches[0]);
+            foreach ($videos as $video) {
+                $video_content = $this->catch_html($video);
+                preg_match('/video-sources="([^"]+)"/', $video_content, $matches);
+                $list = preg_split('/&\d+=/', str_replace('fluency=', '', urldecode($matches[1])));
+                $list = array_filter($list, function ($value) {
+                    return strpos($value, 'http') === 0;
+                });
+                $video_url = end($list);
+                preg_match('/[^\/]+\.mp4/', $video_url, $m);
+                file_put_contents($dir . $m[0], $this->catch_html($video_url, false));
+            }
+
+            preg_match_all('/node-type="loading" action-data="(type=photo&owner_uid=[^"&]+&viewer_uid=[^"&]+&since_id=[^"&]+)"/', $content, $matches);
+            if (empty($matches[1][0])) {
+                break;
+            }
+            $data = $matches[1][0];
+            $rnd = rand();
+            $page++;
+            $next_url = "{$domain}/p/aj/album/loading?ajwvr=6&{$data}&page_id=1005055812298777&page={$page}&ajax_call=1&__rnd={$rnd}";
+            $content = $this->catch_html($next_url, true, true);
         }
     }
 
@@ -82,7 +104,7 @@ class Weibo
      * @author maskxu
      * @throws Exception
      */
-    public function catch_html($url)
+    public function catch_html($url, $replace = true, $ajax = false)
     {
         //获得tid
         static $xcookie;
@@ -101,9 +123,8 @@ class Weibo
                 $xcookie = file_get_contents($xcookie_path);
             }
         }
-        $content = $this->_curl_data($url, "GET", "", true, $xcookie, false);
-        file_put_contents($this->getSavePath() . 'content.html', $content);
-        return str_replace('\\', '', $content);
+        $content = $this->_curl_data($url, "GET", "", true, $xcookie, false, $ajax);
+        return $replace ? str_replace('\\', '', $content) : $content;
     }
 
     //获得tid
@@ -119,13 +140,16 @@ class Weibo
     }
 
     //第一次获得cookie. sub,subp,cookie是第二次获得跨域cookie必须的.
-    private function _curl_data($url, $method = "GET", $postdata = "", $ssl = true, &$cookie = "", $show_header = true)
+    private function _curl_data($url, $method = "GET", $postdata = "", $ssl = true, &$cookie = "", $show_header = true, $ajax = false)
     {
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_PROXY, '127.0.0.1:8888');
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36');//模拟UA
+        if ($ajax) {
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['X-Requested-With: XMLHttpRequest']);
+        }
         if ($show_header)
             curl_setopt($ch, CURLOPT_HEADER, 1);  //show header 为了拿到cookie
         if ($method == "POST") {
@@ -141,6 +165,9 @@ class Weibo
             curl_setopt($ch, CURLOPT_COOKIE, $cookie);
         }
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);//关闭直接输出
+        if (self::PROXY) {
+            curl_setopt($ch, CURLOPT_PROXY, self::PROXY);
+        }
         $data = curl_exec($ch);
         if ($show_header) {
             preg_match_all('|Set-Cookie: (.*);|U', $data, $results);
